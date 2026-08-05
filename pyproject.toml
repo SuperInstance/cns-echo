@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "cns-echo"
+version = "0.1.0"
+description = "Simple CNS echo agent — receives USCP signals and echoes back with analysis"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "SuperInstance"}]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+cns-echo = "cns_echo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
