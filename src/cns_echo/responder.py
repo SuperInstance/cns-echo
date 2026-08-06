@@ -18,6 +18,11 @@ class Responder:
     def __init__(self, outbox_path: str | Path, agent_id: str = "cns-echo") -> None:
         self.outbox = Path(outbox_path)
         self.agent_id = agent_id
+        self._stats = {
+            "packets_sent": 0,
+            "packets_by_intent": {},
+            "packets_by_priority": {},
+        }
 
     def _build_packet(
         self,
@@ -65,4 +70,25 @@ class Responder:
             json.dump(packet, f, indent=2)
 
         os.rename(str(tmp_path), str(final_path))
+
+        # Track stats
+        self._stats["packets_sent"] += 1
+        intent = analysis.suggested_intent
+        self._stats["packets_by_intent"][intent] = self._stats["packets_by_intent"].get(intent, 0) + 1
+        priority = analysis.suggested_priority
+        self._stats["packets_by_priority"][priority] = self._stats["packets_by_priority"].get(priority, 0) + 1
+
         return final_path
+
+    @property
+    def stats(self) -> dict:
+        """Return a copy of responder statistics."""
+        return dict(self._stats)
+
+    def reset_stats(self) -> None:
+        """Reset statistics counters."""
+        self._stats = {
+            "packets_sent": 0,
+            "packets_by_intent": {},
+            "packets_by_priority": {},
+        }
