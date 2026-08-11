@@ -58,6 +58,8 @@ def _verify_checksum(packet: dict) -> bool:
     """Verify packet checksum. USCP-v1 uses a simple convention —
     if checksum is 'verified' or matches a content hash, accept it."""
     sig = packet.get("signature", {})
+    if not isinstance(sig, dict):
+        return False
     checksum = sig.get("checksum", "")
 
     if not checksum:
@@ -74,17 +76,62 @@ def _verify_checksum(packet: dict) -> bool:
     return computed == checksum
 
 
+def _sanitize_float(value: float, default: float = 0.0) -> float:
+    """Replace NaN/Inf with a safe default. Fleet-wide NaN guard."""
+    import math
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(v) or math.isinf(v):
+        return default
+    return v
+
+
 def analyze(packet: dict) -> AnalysisResult:
-    """Analyze a USCP packet and return structured results."""
+    """Analyze a USCP packet and return structured results.
+
+    Handles malformed input gracefully: non-dict packets, missing sections,
+    and NaN/Inf in numeric fields are all caught and reported.
+    """
     start = time.perf_counter()
     errors: list[str] = []
     warnings: list[str] = []
     checks: dict[str, bool] = {}
     notes: list[str] = []
 
+    # Guard against completely malformed input
+    if not isinstance(packet, dict):
+        return AnalysisResult(
+            health_score=0.0,
+            health_notes=["Packet is not a dict — completely malformed"],
+            protocol_checks={"is_dict": False},
+            protocol_errors=[f"Packet must be a dict, got {type(packet).__name__}"],
+            protocol_warnings=[],
+            suggested_intent="ECHO",
+            suggested_priority="LOW",
+            suggested_payload={"type": "error", "data": {"error": "malformed_packet"}},
+            checksum_valid=False,
+            received_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            processing_time_ms=(time.perf_counter() - start) * 1000,
+        )
+
     header = packet.get("header", {})
     body = packet.get("body", {})
     sig = packet.get("signature", {})
+
+    # Guard against non-dict sections
+    if not isinstance(header, dict):
+        header = {}
+        errors.append("header is not a dict")
+    if not isinstance(body, dict):
+        body = {}
+        errors.append("body is not a dict")
+    if not isinstance(sig, dict):
+        sig = {}
+        errors.append("signature is not a dict")
 
     # --- Header checks ---
     for field in REQUIRED_HEADER_FIELDS:
@@ -135,10 +182,10 @@ def analyze(packet: dict) -> AnalysisResult:
     if not checksum_valid:
         warnings.append("Checksum verification failed")
 
-    # --- Health score ---
+    # --- Health score (NaN-guarded) ---
     total_checks = len(checks)
     passed = sum(1 for v in checks.values() if v)
-    health_score = passed / total_checks if total_checks > 0 else 0.0
+    health_score = _sanitize_float(passed / total_checks if total_checks > 0 else 0.0)
 
     if health_score >= 0.9:
         notes.append("Signal is healthy and protocol-compliant")
