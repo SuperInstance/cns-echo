@@ -57,6 +57,39 @@ Each signal receives:
 | Signature | type and checksum present |
 | Checksum | Content hash or "verified" convention |
 
+## Echo Space — the bus as a room the elephant reads
+
+The CNS bus isn't just a stream of packets — it's a *conversation*, and a
+conversation has a temperature. `EchoSpace` (`cns_echo.echo_space`) mates the
+echo to the elephant's space abstraction: every echoed packet becomes a
+`Message` the elephant can read, the dial bank feels the fleet's warmth, and
+the field's deadband **rings when the bus's mood crosses a threshold** — a
+fleet-wide laugh or a fleet-wide panic, ringing up the chain as a command.
+
+![Echo Space — a dark hallway of many doors, each glowing with the warmth of the conversation behind it; one door glows amber-red where the mood crossed a threshold](assets/images/echo-space.png)
+
+```mermaid
+flowchart LR
+    P["echoed USCP packet"] -->|ingest| M["Message<br/>author = sender<br/>text = payload"]
+    M --> R["Room<br/>the fleet's conversation"]
+    R --> DB["DialBank<br/>9 JEPA dials"]
+    DB --> RF["RoomField<br/>warmth · κ · 9 dials"]
+    RF --> DB2{"deadband<br/>mood crossed<br/>threshold?"}
+    DB2 -->|yes| RING["Ring up the chain<br/>laugh / panic → command"]
+    DB2 -->|no| QUIET["steady bus — stays quiet"]
+```
+
+```python
+from cns_echo.echo_space import EchoSpace
+
+space = EchoSpace("cns-bus")
+space.ingest(packet)            # echoed packet -> Message
+field = space.read_field()      # DialBank -> RoomField (warmth, κ, 9 dials)
+ring = space.deadband_check()   # a Ring when the bus's mood crosses
+```
+
+Full writeup: [`docs/echo-space.md`](docs/echo-space.md).
+
 ## License
 
 MIT
