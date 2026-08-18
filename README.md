@@ -142,6 +142,22 @@ field = space.read_field()      # DialBank -> RoomField (warmth, κ, 9 dials)
 ring = space.deadband_check()   # a Ring when the bus's mood crosses
 ```
 
+### The ring travels
+
+In `--watch` mode every analyzed packet is fed into a module-level
+`EchoSpace` (`cns_echo.cli.ECHO_SPACE`). After each batch the deadband is
+checked, and on a `Ring` the `Responder` writes a USCP-v1 `STATUS_REPORT`
+into the outbox — **HIGH** priority for panic, **MEDIUM** for warmth swings —
+with the ring and the current field as payload. One packet per ring edge
+(rising only, hysteresis re-anchored on every ring), not per poll: the
+deadband is the whole point.
+
+```python
+from cns_echo.responder import Responder, ring_priority
+
+path = responder.respond_ring(ring, space.read_field())   # -> outbox/*.json
+```
+
 ### The zero-dependency import rule
 
 `EchoSpace` uses the real elephant's `Room`/`Message`/`Dial`/`DialBank`/
@@ -167,7 +183,7 @@ src/cns_echo/
 ## Testing
 
 ```bash
-pytest            # 139 tests
+pytest            # 168 tests
 ```
 
 CI runs pytest on every push (`.github/workflows/`).

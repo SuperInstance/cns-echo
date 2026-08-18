@@ -11,7 +11,12 @@ from pathlib import Path
 
 from . import __version__
 from .echo import analyze
-from .responder import Responder
+from .echo_space import EchoSpace
+from .responder import Responder, ring_priority
+
+# The bus, read as a room — module-level so the watch daemon's whole
+# process shares one deadband (the ring is an edge, not a poll).
+ECHO_SPACE = EchoSpace("cns-echo-bus")
 
 
 def default_inbox() -> str:
@@ -92,6 +97,10 @@ def main() -> None:
 
         result = analyze(packet)
 
+        # Feed every analyzed packet into the bus-room — the deadband
+        # rings when the fleet's mood crosses a threshold.
+        ECHO_SPACE.ingest(packet)
+
         print(f"    Health: {result.health_score:.0%}  |  "
               f"Checks: {sum(result.protocol_checks.values())}/{len(result.protocol_checks)}  |  "
               f"Time: {result.processing_time_ms:.1f}ms")
@@ -121,16 +130,30 @@ def main() -> None:
         print(f"cns-echo v{__version__} — watching {inbox}")
         print(f"  Agent ID: {args.agent_id}")
         print(f"  Outbox: {outbox}")
+        print(f"  Echo space: {ECHO_SPACE.name} (deadband {ECHO_SPACE.deadband})")
         print(f"  Poll interval: {args.interval}s")
         print(f"  Consume: {args.consume}  |  Dry run: {args.dry_run}")
         print()
 
         while True:
             if inbox.is_dir():
+                batch = 0
                 for entry in sorted(inbox.iterdir()):
                     if entry.is_file() and entry.suffix == ".json" and entry.name not in seen:
                         seen.add(entry.name)
                         process_file(entry)
+                        batch += 1
+                if batch:
+                    # After each batch: the deadband. One packet per ring
+                    # edge (rising only) — not per poll.
+                    ring = ECHO_SPACE.deadband_check()
+                    if ring is not None:
+                        priority = ring_priority(ring)
+                        print(f"  🔔 RING [{priority}] {ring.message}")
+                        if not args.dry_run:
+                            report = responder.respond_ring(ring, ECHO_SPACE.read_field())
+                            print(f"    ✓ Status report dropped: {report.name}")
+                        print()
             time.sleep(args.interval)
     else:
         # One-shot: process all unread JSON files
