@@ -1,0 +1,33 @@
+[Unit]
+Description=CNS Echo — bus stethoscope + ring travel
+After=network.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+WorkingDirectory=/home/eileen/projects/cns-echo
+Environment=PYTHONPATH=/home/eileen/projects/cns-echo/src
+ExecStart=/usr/bin/python3 -m cns_echo.cli --watch --consume --interval 1
+Restart=always
+RestartSec=3
+MemoryMax=128M
+MemoryHigh=96M
+CPUQuota=50%
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/eileen/.hermes /home/eileen/projects/cns-echo
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+[Install]
+WantedBy=default.target
