@@ -58,6 +58,9 @@ cns-echo --dry-run
 
 # Custom agent identity / poll interval
 cns-echo --watch --agent-id my-agent --interval 0.5
+
+# The fleet's EKG strip — one JSON line per field window
+cns-echo --watch --mood-log
 ```
 
 ### CLI flags
@@ -71,6 +74,7 @@ cns-echo --watch --agent-id my-agent --interval 0.5
 | `--interval` | `1.0` | Poll interval (seconds) in watch mode |
 | `--consume` | off | Delete inbox signals after processing |
 | `--dry-run` | off | Analyze and print without writing responses |
+| `--mood-log [PATH]` | off | Append one JSON line per field window to `PATH` (default: `fleet-mood.jsonl`) — the fleet's EKG strip |
 | `--version` | — | Print version and exit |
 
 ### What the console output looks like
@@ -156,6 +160,31 @@ deadband is the whole point.
 from cns_echo.responder import Responder, ring_priority
 
 path = responder.respond_ring(ring, space.read_field())   # -> outbox/*.json
+```
+
+### The EKG strip
+
+`EchoSpace` also keeps a bounded rolling `FieldHistory`: every `window`
+packets (100 by default) one `FieldEntry` — the field at the moment the
+window closed — is committed to a deque that holds at most `max_windows`
+entries (50 by default). Bounded by law, like every elephant window.
+With `--mood-log`, each committed window also appends one JSON line to
+`fleet-mood.jsonl`, so every agent on the bus can read the fleet's mood
+as a file — the in-memory deque is working memory, the strip is the
+timeline.
+
+```json
+{"dials": {"mood": 0.25, "panic": 0.0, ...}, "kappa": 0.87,
+ "packets": 100, "space": "cns-echo-bus", "ts": 1755523200.0,
+ "warmth": 0.12, "window": 42}
+```
+
+```python
+space = EchoSpace("cns-bus", window=100, max_windows=50,
+                  mood_log="fleet-mood.jsonl")
+space.ingest(*packets)              # windows close as packets flow in
+space.history.latest                # the newest FieldEntry
+len(space.history)                  # <= max_windows, forever
 ```
 
 ### The zero-dependency import rule

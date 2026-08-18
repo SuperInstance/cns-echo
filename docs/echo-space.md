@@ -72,20 +72,33 @@ A fleet-wide **laugh** rings *up* the chain; a fleet-wide **panic** rings
 *down* — each a command in the bus's own idiom. The elephant is the
 light, and the light, here, is the fleet's temperature made audible.
 
+## The EKG strip — the mood as a file
+
+Every `window` (100) ingested packets, the current field is committed to
+a bounded rolling `FieldHistory` — a deque holding at most `max_windows`
+(50) entries, bounded by law like every elephant window. When `mood_log`
+is set (the CLI's `--mood-log` flag), each committed window also appends
+one JSON line to `fleet-mood.jsonl`, so every agent on the bus can read
+the fleet's mood as a file. The deque is working memory; the strip is
+the timeline.
+
 ## API
 
 | Member | What it is |
 |--------|-----------|
-| `EchoSpace(name, deadband=0.25, bank=None)` | the adapter |
+| `EchoSpace(name, deadband=0.25, bank=None, window=100, max_windows=50, mood_log=None)` | the adapter |
 | `.ingest(*packets)` | packets → Messages; returns `self` |
 | `.packet(packet, ts=None)` | one packet → its Message |
 | `.room` | the normalized `Room` |
 | `.read_field(bank=None)` / `.read(bank)` | DialBank → `RoomField` |
 | `.deadband_check(metric="warmth", threshold=None)` | mood crossing → `Ring` or `None` |
+| `.history` | the bounded `FieldHistory` — the EKG strip |
 | `.tint(field)` / `.send_back(field)` | the bus's temperature as a status line |
 | `.tint_target()` | `"the bus status line"` |
 | `.skipped` | count of malformed packets dropped |
 | `Ring` | `direction`, `metric`, `value`, `previous`, `threshold`, `readings`, `message`, `ts`, `is_alarm`, `is_laugh` |
+| `FieldHistory` | `feed(count, snapshot)`, `entries` (deque, ≤ `max_windows`), `window`, `total_windows`, `latest`, `lines_written` |
+| `FieldEntry` | `window`, `ts`, `packets`, `warmth`, `kappa`, `readings`, `to_json()` |
 
 ## Zero-dependency import rule
 

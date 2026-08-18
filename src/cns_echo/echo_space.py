@@ -42,14 +42,17 @@ import os
 import re
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass, field as dc_field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 __all__ = [
     "EchoSpace",
     "Ring",
+    "FieldEntry",
+    "FieldHistory",
     "Message",
     "Room",
     "Dial",
@@ -578,6 +581,128 @@ def _ring_message(name: str, direction: str, metric: str, value: float,
 
 
 # --------------------------------------------------------------------------- #
+# FieldHistory — the EKG strip: bounded rolling memory of the bus's field     #
+# --------------------------------------------------------------------------- #
+def _clean4(value: Any) -> float:
+    """Round for transport; NaN/Inf collapse to 0.0 so JSON stays valid."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(v, 4) if math.isfinite(v) else 0.0
+
+
+@dataclass
+class FieldEntry:
+    """One window of the fleet's field — one beat of the EKG strip."""
+
+    window: int                 # 1-based window index since the space began
+    ts: float                   # when the window closed
+    packets: int                # packets the room held when it closed
+    warmth: float
+    kappa: float
+    readings: Dict[str, float]  # the full dial bank at close
+
+    def to_json(self) -> Dict[str, Any]:
+        """The entry as one mood-log line, ready for any agent to read."""
+        return {
+            "window": self.window,
+            "ts": _clean4(self.ts),
+            "packets": self.packets,
+            "warmth": _clean4(self.warmth),
+            "kappa": _clean4(self.kappa),
+            "dials": {str(k): _clean4(v) for k, v in self.readings.items()},
+        }
+
+
+class FieldHistory:
+    """The bus's EKG strip — a bounded rolling history of the field.
+
+    Every `window` ingested packets, one `FieldEntry` is committed: the
+    field at the moment the window closed. The deque holds at most
+    `max_windows` entries — bounded by law, like every elephant window.
+    The in-memory deque is working memory; the mood log (if set) is the
+    durable timeline: one JSON line per committed window, appended to
+    `mood_log` so every agent on the bus can read the fleet's mood as a
+    file.
+    """
+
+    def __init__(self, window: int = 100, max_windows: int = 50,
+                 mood_log: Optional[Any] = None, name: str = ""):
+        self.window = max(1, int(window))
+        self.max_windows = max(1, int(max_windows))
+        self.entries: "deque[FieldEntry]" = deque(maxlen=self.max_windows)
+        self.total_windows = 0
+        self.lines_written = 0
+        self.log_errors = 0
+        self.name = str(name)
+        self.mood_log: Optional[Path] = (
+            Path(mood_log) if mood_log is not None else None)
+        self._since = 0            # packets counted toward the open window
+
+    def feed(self, count: int,
+             snapshot: Callable[[], Dict[str, Any]]) -> List[FieldEntry]:
+        """Account for `count` new packets; commit one entry each time a
+        window closes. `snapshot()` supplies the field at close time
+        ({"packets", "warmth", "kappa", "readings"}) and is read at most
+        once per feed — a batch shares one reading. Returns the entries
+        this call committed."""
+        if count <= 0:
+            return []
+        self._since += count
+        if self._since < self.window:
+            return []
+        snap = _sanitize(snapshot())
+        committed: List[FieldEntry] = []
+        while self._since >= self.window:
+            self._since -= self.window
+            self.total_windows += 1
+            entry = FieldEntry(
+                window=self.total_windows,
+                ts=time.time(),
+                packets=int(snap.get("packets", 0)),
+                warmth=float(snap.get("warmth", 0.0)),
+                kappa=float(snap.get("kappa", 0.0)),
+                readings=dict(snap.get("readings", {})),
+            )
+            self.entries.append(entry)
+            committed.append(entry)
+            self._append_mood_line(entry)
+        return committed
+
+    def _append_mood_line(self, entry: FieldEntry) -> None:
+        """One JSON line per window — the strip. A bad log path never
+        kills the bus; after a failed append, logging stands down."""
+        if self.mood_log is None:
+            return
+        line = json.dumps({**entry.to_json(), "space": self.name},
+                          sort_keys=True)
+        try:
+            with open(self.mood_log, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            self.lines_written += 1
+        except OSError:
+            self.log_errors += 1
+            self.mood_log = None
+
+    @property
+    def latest(self) -> Optional[FieldEntry]:
+        """The most recently committed window, if any."""
+        return self.entries[-1] if self.entries else None
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def __iter__(self):
+        return iter(self.entries)
+
+    def __repr__(self) -> str:
+        return (f"<FieldHistory window={self.window} "
+                f"entries={len(self.entries)}/{self.max_windows} "
+                f"total={self.total_windows}>")
+
+
+# --------------------------------------------------------------------------- #
 # EchoSpace                                                                   #
 # --------------------------------------------------------------------------- #
 class EchoSpace:
@@ -592,6 +717,9 @@ class EchoSpace:
                               nine dials)
         deadband_check()    — the field's deadband: rings when the bus's mood
                               crosses a threshold (a Ring up the chain)
+        .history            — the bounded FieldHistory (the EKG strip):
+                              one FieldEntry per window of `window` packets,
+                              one JSONL line per window when mood_log is set
         tint()/send_back()  — the bus's temperature phrased as a status line
         tint_target()       — "the bus status line"
     """
@@ -600,7 +728,9 @@ class EchoSpace:
     step = 60.0
 
     def __init__(self, name: str, deadband: float = 0.25,
-                 bank: Optional[DialBank] = None):
+                 bank: Optional[DialBank] = None, window: int = 100,
+                 max_windows: int = 50,
+                 mood_log: Optional[Any] = None):
         self.name = name
         self.deadband = float(deadband)
         self.bank = bank if bank is not None else DialBank(list(DEFAULT_DIALS))
@@ -610,18 +740,24 @@ class EchoSpace:
         self._last_ring_value: Dict[str, Optional[float]] = {}
         self.status = f"{name} — bus quiet"
         self._last_tint: Optional[str] = None
+        self.history = FieldHistory(window=window, max_windows=max_windows,
+                                    mood_log=mood_log, name=name)
 
     # -- ingest ------------------------------------------------------- #
     def ingest(self, *packets: Any) -> "EchoSpace":
         """Accept one or more echoed packets (or Messages / (author, text)
         tuples); return self. Malformed packets are skipped, never fatal."""
+        added = 0
         for p in packets:
             msg = _packet_to_message(p, self._next_ts())
             if msg is None:
                 self._skipped += 1
                 continue
             self._room.messages.append(msg)
-        self._room.messages.sort(key=lambda m: m.ts)
+            added += 1
+        if added:
+            self._room.messages.sort(key=lambda m: m.ts)
+            self.history.feed(added, self._field_snapshot)
         return self
 
     def packet(self, packet: dict, ts: Optional[float] = None) -> Optional[Message]:
@@ -632,6 +768,7 @@ class EchoSpace:
             return None
         self._room.messages.append(msg)
         self._room.messages.sort(key=lambda m: m.ts)
+        self.history.feed(1, self._field_snapshot)
         return msg
 
     # -- normalized room ---------------------------------------------- #
@@ -706,6 +843,16 @@ class EchoSpace:
         return text
 
     # -- internals ---------------------------------------------------- #
+    def _field_snapshot(self) -> Dict[str, Any]:
+        """The field at window close — what the EKG strip records."""
+        f = self.read_field()
+        return {
+            "packets": len(self._room),
+            "warmth": f.warmth(),
+            "kappa": f.concentration(),
+            "readings": dict(f.readings),
+        }
+
     def _next_ts(self, ts: Optional[float] = None) -> float:
         if ts is None:
             ts = self._clock

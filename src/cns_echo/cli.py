@@ -69,6 +69,15 @@ def main() -> None:
         help="Analyze and print results without writing response packets",
     )
     parser.add_argument(
+        "--mood-log",
+        nargs="?",
+        const="fleet-mood.jsonl",
+        default=None,
+        metavar="PATH",
+        help="Append one JSON line per field window to PATH — the fleet's "
+             "EKG strip (default file name: fleet-mood.jsonl)",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"cns-echo {__version__}",
@@ -80,6 +89,11 @@ def main() -> None:
     outbox = Path(args.outbox)
     responder = Responder(outbox, agent_id=args.agent_id)
     seen: set[str] = set()
+
+    if args.mood_log:
+        # The EKG strip: one JSONL line per field window, appended inside
+        # EchoSpace.ingest as each window closes.
+        ECHO_SPACE.history.mood_log = Path(args.mood_log)
 
     def process_file(filepath: Path) -> None:
         try:
@@ -131,6 +145,9 @@ def main() -> None:
         print(f"  Agent ID: {args.agent_id}")
         print(f"  Outbox: {outbox}")
         print(f"  Echo space: {ECHO_SPACE.name} (deadband {ECHO_SPACE.deadband})")
+        if ECHO_SPACE.history.mood_log is not None:
+            print(f"  Mood log: {ECHO_SPACE.history.mood_log} "
+                  f"(one line per {ECHO_SPACE.history.window} pkts)")
         print(f"  Poll interval: {args.interval}s")
         print(f"  Consume: {args.consume}  |  Dry run: {args.dry_run}")
         print()
