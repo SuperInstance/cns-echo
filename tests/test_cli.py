@@ -24,12 +24,14 @@ class TestDefaultPaths:
         assert "cns_outbox" in result
         assert str(Path.home()) in result
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="HOME-based ~ expansion is Unix-specific")
     def test_default_inbox_expands_user(self):
         """Should expand ~ to home directory."""
         with patch.dict("os.environ", {"HOME": "/tmp/fakehome"}):
             result = cli.default_inbox()
             assert "/tmp/fakehome" in result
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="HOME-based ~ expansion is Unix-specific")
     def test_default_outbox_expands_user(self):
         with patch.dict("os.environ", {"HOME": "/tmp/fakehome"}):
             result = cli.default_outbox()

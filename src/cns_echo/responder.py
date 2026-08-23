@@ -149,7 +149,7 @@ class Responder:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(packet, f, indent=2)
 
-        os.rename(str(tmp_path), str(final_path))
+        os.replace(str(tmp_path), str(final_path))
         return final_path
 
     def _track(self, intent: str, priority: str) -> None:

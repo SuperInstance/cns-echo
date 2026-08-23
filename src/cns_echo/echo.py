@@ -27,6 +27,9 @@ REQUIRED_HEADER_FIELDS = {"origin_id", "timestamp", "priority", "sequence_id"}
 REQUIRED_BODY_FIELDS = {"intent", "payload"}
 REQUIRED_SIGNATURE_FIELDS = {"type", "checksum"}
 
+USCP_V3_HEADER_ALIASES = {"correlation_id", "destination_id"}
+USCP_V3_SIGNATURE_ALIASES = {"extensions"}
+
 
 @dataclass
 class AnalysisResult:
@@ -53,28 +56,32 @@ class AnalysisResult:
     received_at: str
     processing_time_ms: float
 
+    # Protocol metadata
+    protocol_version: str = "USCP-v1"
+
 
 def _verify_checksum(packet: dict) -> bool:
-    """Verify packet checksum. USCP-v1 uses a simple convention —
-    if checksum is 'verified' or matches a content hash, accept it."""
+    """Verify packet checksum.
+
+    USCP-v1 expects a 'checksum' field in the signature (verified or SHA prefix).
+    USCP-v3 drops checksum validation and uses identity_hash inside payload instead.
+    """
     sig = packet.get("signature", {})
     if not isinstance(sig, dict):
         return False
+    protocol_version = str(sig.get("type", "USCP-v1"))
+    if protocol_version.startswith("USCP-v3"):
+        return True
     checksum = sig.get("checksum", "")
-
     if not checksum:
         return False
-
     if checksum in ("verified", "handshake-verified"):
         return True
-
-    # Content hash verification: recompute sha256 of header+body
     header = packet.get("header", {})
     body = packet.get("body", {})
     content = json.dumps({"header": header, "body": body}, sort_keys=True)
     computed = hashlib.sha256(content.encode()).hexdigest()[:16]
     return computed == checksum
-
 
 def _sanitize_float(value: float, default: float = 0.0) -> float:
     """Replace NaN/Inf with a safe default. Fleet-wide NaN guard."""
@@ -133,8 +140,14 @@ def analyze(packet: dict) -> AnalysisResult:
         sig = {}
         errors.append("signature is not a dict")
 
+    # --- Version detection ---
+    sig = packet.get("signature", {}) if isinstance(packet.get("signature"), dict) else {}
+    protocol_version = str(sig.get("type", "USCP-v1"))
+    is_v3 = protocol_version.startswith("USCP-v3")
+
     # --- Header checks ---
-    for field in REQUIRED_HEADER_FIELDS:
+    header_fields = REQUIRED_HEADER_FIELDS if not is_v3 else (REQUIRED_HEADER_FIELDS | {"correlation_id"})
+    for field in header_fields:
         present = field in header and header[field] is not None
         checks[f"header.{field}"] = present
         if not present:
@@ -147,11 +160,12 @@ def analyze(packet: dict) -> AnalysisResult:
     if priority and not priority_valid:
         warnings.append(f"Unknown priority '{priority}' (expected one of {VALID_PRIORITIES})")
 
-    # Sequence ID should be a positive integer
-    seq = header.get("sequence_id")
-    checks["header.sequence_id_type"] = isinstance(seq, int)
-    if seq is not None and not isinstance(seq, int):
-        warnings.append(f"sequence_id should be integer, got {type(seq).__name__}")
+    # Sequence ID should be a positive integer (v1 only)
+    if not is_v3:
+        seq = header.get("sequence_id")
+        checks["header.sequence_id_type"] = isinstance(seq, int)
+        if seq is not None and not isinstance(seq, int):
+            warnings.append(f"sequence_id should be integer, got {type(seq).__name__}")
 
     # --- Body checks ---
     for field in REQUIRED_BODY_FIELDS:
@@ -171,7 +185,8 @@ def analyze(packet: dict) -> AnalysisResult:
     checks["body.payload_has_data"] = "data" in payload if payload else False
 
     # --- Signature checks ---
-    for field in REQUIRED_SIGNATURE_FIELDS:
+    sig_required = REQUIRED_SIGNATURE_FIELDS if not is_v3 else (REQUIRED_SIGNATURE_FIELDS | {"extensions"})
+    for field in sig_required:
         present = field in sig
         checks[f"signature.{field}"] = present
         if not present:
