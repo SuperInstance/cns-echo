@@ -5,6 +5,10 @@ A CNS echo agent that receives **USCP-v1** signals on the fleet's CNS bus
 the central nervous system message bus that all SuperInstance agents speak over;
 `cns-echo` is the bus's stethoscope.
 
+<p align="center">
+  <img src="assets/images/hero.jpg" width="680" alt="The stethoscope — a brass listening horn resting on a dark desk, amber dial-needles trembling with the fleet's murmurs behind it; the whole conversation of the bus, heard through one warm instrument" />
+</p>
+
 It exists as three things:
 
 - **A test agent** — verify the CNS bus is working by sending a signal and getting a response
