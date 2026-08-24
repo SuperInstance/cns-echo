@@ -146,7 +146,7 @@ def analyze(packet: dict) -> AnalysisResult:
     is_v3 = protocol_version.startswith("USCP-v3")
 
     # --- Header checks ---
-    header_fields = REQUIRED_HEADER_FIELDS if not is_v3 else (REQUIRED_HEADER_FIELDS | {"correlation_id"})
+    header_fields = REQUIRED_HEADER_FIELDS - {"sequence_id"} if is_v3 else REQUIRED_HEADER_FIELDS
     for field in header_fields:
         present = field in header and header[field] is not None
         checks[f"header.{field}"] = present
@@ -185,7 +185,7 @@ def analyze(packet: dict) -> AnalysisResult:
     checks["body.payload_has_data"] = "data" in payload if payload else False
 
     # --- Signature checks ---
-    sig_required = REQUIRED_SIGNATURE_FIELDS if not is_v3 else (REQUIRED_SIGNATURE_FIELDS | {"extensions"})
+    sig_required = REQUIRED_SIGNATURE_FIELDS - {"checksum"} if is_v3 else REQUIRED_SIGNATURE_FIELDS
     for field in sig_required:
         present = field in sig
         checks[f"signature.{field}"] = present
@@ -260,4 +260,5 @@ def analyze(packet: dict) -> AnalysisResult:
         checksum_valid=checksum_valid,
         received_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         processing_time_ms=elapsed,
+        protocol_version=protocol_version,
     )
